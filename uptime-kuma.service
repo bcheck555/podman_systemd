@@ -5,8 +5,8 @@
 [Unit]
 Description=Podman container-uptime-kuma.service
 Documentation=man:podman-generate-systemd(1)
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target signal-api.service
+After=network-online.target signal-api.service
 RequiresMountsFor=%t/containers
 
 [Service]
@@ -21,7 +21,8 @@ ExecStart=/usr/bin/podman run \
 	--replace \
 	-d \
 	--security-opt label=disable \
-	--net=host \
+	--network monitoring \
+	-p 3001:3001 \
 	-v /home/ec2-user/uptime-kuma:/app/data:Z \
 	--cap-add=NET_RAW \
 	--name uptime-kuma \

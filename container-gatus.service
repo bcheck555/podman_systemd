@@ -5,8 +5,8 @@
 [Unit]
 Description=Podman container-gatus.service
 Documentation=man:podman-generate-systemd(1)
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target signal-api.service
+After=network-online.target signal-api.service
 RequiresMountsFor=%t/containers
 
 [Service]
@@ -17,6 +17,7 @@ TimeoutStopSec=70
 ExecStart=/usr/bin/podman run \
 	--cidfile=%t/%n.ctr-id \
 	--cgroups=no-conmon \
+	--network monitoring \
         --env-file /home/ec2-user/gatus/.env \
 	--rm \
 	--sdnotify=conmon \
