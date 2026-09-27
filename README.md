@@ -10,6 +10,8 @@ absolute paths under `/home/ec2-user`.
 
 - Unit: `signal-api.service`
 - Image: `docker.io/bbernhard/signal-cli-rest-api:latest`
+- Mode: `json-rpc-native` keeps a low-latency daemon running so alert requests
+  complete within Gatus's HTTP timeout
 - Access: internal `monitoring` network only, using the `signal-api` alias
 - Data: `/home/ec2-user/signal-api` mounted at
   `/home/.local/share/signal-cli`

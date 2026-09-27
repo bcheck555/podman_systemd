@@ -27,7 +27,7 @@ ExecStart=/usr/bin/podman run \
         --network monitoring \
         --network-alias signal-api \
         -v /home/ec2-user/signal-api:/home/.local/share/signal-cli:Z \
-        -e MODE=native \
+        -e MODE=json-rpc-native \
         -e SIGNAL_CLI_UID=1000 \
         -e SIGNAL_CLI_GID=1000 \
         --label io.containers.autoupdate=registry \
