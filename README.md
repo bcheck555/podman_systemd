@@ -21,7 +21,8 @@ uses `%h` to resolve the home directory of the user running the service.
 
 - Unit: `container-gatus.service`
 - Image: `docker.io/twinproduction/gatus:latest`
-- Access: `http://HOST:8085`, mapped to container port `8080`
+- Access: `http://HOST:443`, mapped to container port `8080`
+- Transport: plain HTTP on port 443; TLS is not enabled yet
 - Data: `/home/ec2-user/gatus/config`, `/home/ec2-user/gatus/data`, and
   the configured CA bundle
 
@@ -105,7 +106,10 @@ config exists, credentials are valid, and the host can reach GHCR and No-IP.
 - Podman installed at `/usr/bin/podman`
 - The `ec2-user` account, normally with UID and GID 1000 as required by the
   Signal API unit
-- Permission to expose TCP ports 8085 and 3001 on the host
+- Permission to expose TCP ports 443 and 3001 on the host, including firewall
+  and security-group rules where applicable
+- Rootless binding to port 443 permitted by the host's
+  `net.ipv4.ip_unprivileged_port_start` setting (443 or lower)
 - SELinux configuration that permits the labeled bind mounts, if SELinux is
   enabled
 
@@ -114,6 +118,19 @@ units as root or under `/etc/systemd/system`; `%t/containers` and
 `default.target` are intended for the user's systemd manager.
 
 ## Prepare the host
+
+Before starting Gatus, check the host's rootless port threshold:
+
+```sh
+sysctl net.ipv4.ip_unprivileged_port_start
+```
+
+If the value exceeds 443, an administrator must configure the host to permit
+rootless binding to that port. For example, persist
+`net.ipv4.ip_unprivileged_port_start=443` in a file under `/etc/sysctl.d/` and
+apply it with `sudo sysctl --system`. This host-wide setting allows all
+unprivileged users to bind ports 443 and above. See the
+[Podman rootless limitations](https://github.com/containers/podman/blob/main/rootless.md).
 
 Create the shared network and persistent directories:
 
@@ -267,8 +284,10 @@ Common causes include:
   `/home/ec2-user/gatus/.env` exists and is readable.
 - **Bind-mount failure:** verify every host path exists, has appropriate
   ownership and permissions, and has a usable SELinux label where applicable.
-- **Port conflict:** check whether another process already listens on TCP 8085
+- **Port conflict:** check whether another process already listens on TCP 443
   or 3001.
+- **Rootless port permission denied:** confirm
+  `net.ipv4.ip_unprivileged_port_start` is 443 or lower.
 - **Signal integration failure:** confirm `signal-api.service` is healthy and
   that the calling container resolves `signal-api` on the `monitoring` network.
 
