@@ -24,7 +24,6 @@ ExecStart=/usr/bin/podman run \
 	--replace \
 	-d \
 	--name gatus \
-        -p 443:8080 \
 	-v /home/ec2-user/gatus/config:/config:Z \
 	-v /home/ec2-user/gatus/data:/data:Z \
         -v /home/ec2-user/gatus/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:Z \

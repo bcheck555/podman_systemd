@@ -21,10 +21,68 @@ uses `%h` to resolve the home directory of the user running the service.
 
 - Unit: `container-gatus.service`
 - Image: `docker.io/twinproduction/gatus:latest`
-- Access: `http://HOST:443`, mapped to container port `8080`
-- Transport: plain HTTP on port 443; TLS is not enabled yet
+- Access: `https://gatus.ddns.net`, through Caddy
+- Transport: HTTP on container port `8080`, internal `monitoring` network only
 - Data: `/home/ec2-user/gatus/config`, `/home/ec2-user/gatus/data`, and
   the configured CA bundle
+
+### Gatus HTTPS proxy
+
+- Unit: `container-gatus-caddy.service`
+- Image: `docker.io/library/caddy:2`
+- Access: host TCP `443`, mapped to Caddy port `443`
+- Configuration: `/home/ec2-user/gatus/caddy/Caddyfile` from the Gatus repository
+- Host storage: `~/gatus-caddy-data/data` (certificates, keys, ACME state) and
+  `~/gatus-caddy-data/config` (Caddy runtime configuration), bind-mounted with
+  SELinux labels into `/data` and `/config`
+- Issuance and renewal: Let's Encrypt TLS-ALPN challenge on TCP `443`
+
+Keep `gatus.ddns.net` pointed at this host's public IP. Allow inbound TCP 443
+in its firewall and cloud security group. Port 443 must reach Caddy directly
+for the TLS-ALPN challenge; a TLS-terminating load balancer or proxy in front
+will prevent validation. Port 80 is not needed or published, and HTTP redirects
+are disabled. Use the HTTPS URL explicitly. Caddy renews certificates while
+running; no Certbot or renewal cron job is required. See
+[Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https).
+
+#### Migrate an existing Gatus service
+
+Place `caddy/Caddyfile` from the Gatus repository at
+`/home/ec2-user/gatus/caddy/Caddyfile` before starting the proxy. From this
+repository, run as `ec2-user`:
+
+The unit creates both storage directories with mode 0700 before startup, using
+`%h` to resolve the service user's home directory. The source Caddyfile remains
+in the Gatus checkout. If Caddy already ran with the previous named volumes,
+stop `container-gatus-caddy.service` and copy each volume's contents into the
+corresponding host directory before restarting, preserving ownership and file
+permissions. Keep the old volumes until HTTPS works with the migrated data to
+avoid losing existing certificates and ACME account state.
+
+```sh
+test -f /home/ec2-user/gatus/caddy/Caddyfile
+# Validate configuration without requesting a certificate.
+podman run --rm \
+  -v /home/ec2-user/gatus/caddy/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
+  docker.io/library/caddy:2 caddy validate --config /etc/caddy/Caddyfile
+```
+
+After validation succeeds, install both units and restart Gatus to release its
+old port 443 mapping. This briefly interrupts dashboard access:
+
+```sh
+install -m 0644 container-gatus.service container-gatus-caddy.service \
+  /home/ec2-user/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user restart container-gatus.service
+systemctl --user enable --now container-gatus-caddy.service
+journalctl --user -u container-gatus-caddy.service -n 50
+```
+
+From an external client, open `https://gatus.ddns.net` and verify the certificate
+is trusted, covers that hostname, and was issued by Let's Encrypt. Logs should
+report successful certificate issuance. If issuance fails, inspect DNS, TCP 443
+reachability, and Caddy logs before repeatedly restarting the service.
 
 ### Uptime Kuma
 
@@ -33,7 +91,7 @@ uses `%h` to resolve the home directory of the user running the service.
 - Access: `http://HOST:3001`
 - Data: `/home/ec2-user/uptime-kuma` mounted at `/app/data`
 
-All three monitoring containers join the rootless Podman network named `monitoring`.
+All monitoring containers and Caddy join the rootless Podman network named `monitoring`.
 Gatus and Uptime Kuma declare ordering and soft dependencies on the Signal API:
 systemd starts `signal-api.service` first, but a Signal API failure does not stop
 the monitoring services from starting. The Signal API is not published on a host
@@ -167,6 +225,10 @@ Place the required Gatus configuration under
 file over the container's `/etc/ssl/certs/ca-certificates.crt`. How the bundle
 is assembled depends on the deployment's trust requirements.
 
+Place the Gatus repository's `caddy/Caddyfile` at
+`/home/ec2-user/gatus/caddy/Caddyfile`. The service creates its host storage under
+`~/gatus-caddy-data` on first start. Preserve it when recreating containers.
+
 Ensure all persistent files belong to `ec2-user`. The Signal API container maps
 its application UID and GID to 1000, matching the values embedded in its unit.
 
@@ -179,6 +241,7 @@ install -d -m 0755 /home/ec2-user/.config/systemd/user
 install -m 0644 \
   signal-api.service \
   container-gatus.service \
+  container-gatus-caddy.service \
   uptime-kuma.service \
   /home/ec2-user/.config/systemd/user/
 
@@ -190,6 +253,7 @@ Enable the Signal API first, followed by its consumers:
 ```sh
 systemctl --user enable --now signal-api.service
 systemctl --user enable --now container-gatus.service uptime-kuma.service
+systemctl --user enable --now container-gatus-caddy.service
 ```
 
 Enabling the units makes them start with the user's `default.target`. To keep
@@ -204,7 +268,7 @@ Confirm the services and containers are running:
 
 ```sh
 systemctl --user --no-pager --full status \
-  signal-api.service container-gatus.service uptime-kuma.service
+  signal-api.service container-gatus.service container-gatus-caddy.service uptime-kuma.service
 podman ps
 ```
 
@@ -228,6 +292,7 @@ systemctl --user restart container-gatus.service uptime-kuma.service
 Stop all services, with the consumers first:
 
 ```sh
+systemctl --user stop container-gatus-caddy.service
 systemctl --user stop container-gatus.service uptime-kuma.service
 systemctl --user stop signal-api.service
 ```
@@ -244,7 +309,8 @@ systemctl --user restart UNIT.service
 ## Container updates
 
 Each container has the `io.containers.autoupdate=registry` label and uses a
-`latest` image tag. Review available updates before applying them:
+mutable image tag (`2` for Caddy, `latest` for the other services). Review
+available updates before applying them:
 
 ```sh
 podman auto-update --dry-run
@@ -260,7 +326,7 @@ systemctl --user list-timers podman-auto-update.timer
 ```
 
 Automatic updates can change application behavior because the image tags are
-not pinned. Back up persistent data and review upstream release notes before
+not pinned to digests. Back up persistent data and review upstream release notes before
 enabling unattended updates.
 
 ## Troubleshooting
@@ -285,7 +351,13 @@ Common causes include:
 - **Bind-mount failure:** verify every host path exists, has appropriate
   ownership and permissions, and has a usable SELinux label where applicable.
 - **Port conflict:** check whether another process already listens on TCP 443
-  or 3001.
+  or 3001. Restart Gatus with the updated unit to release its previous port 443
+  mapping before starting Caddy.
+- **Certificate issuance failure:** check public DNS and inbound TCP 443,
+  including cloud security groups. Ensure no TLS-terminating proxy intercepts
+  Caddy's TLS-ALPN challenge. Inspect `container-gatus-caddy.service` logs.
+- **HTTPS returns 502:** verify Gatus is running and both containers join
+  `monitoring`; Caddy must resolve `gatus` and reach its port 8080.
 - **Rootless port permission denied:** confirm
   `net.ipv4.ip_unprivileged_port_start` is 443 or lower.
 - **Signal integration failure:** confirm `signal-api.service` is healthy and
@@ -302,4 +374,6 @@ Do not commit the Gatus `.env`, certificates, or persistent application data.
 They can contain credentials, Signal identity keys and messages, monitoring
 history, or private trust material. Restrict their ownership and permissions to
 `ec2-user`, and include the Gatus data, Signal API state, and Uptime Kuma data in
-the host's protected backup process.
+the host's protected backup process. Also back up `~/gatus-caddy-data` as the
+rootless service user; its `data` subdirectory contains private keys and ACME
+account state. Do not remove it during routine container updates.

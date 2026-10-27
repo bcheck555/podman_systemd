@@ -1,0 +1,39 @@
+[Unit]
+Description=Caddy HTTPS proxy for Gatus
+Documentation=https://caddyserver.com/docs/automatic-https
+Wants=network-online.target container-gatus.service
+After=network-online.target container-gatus.service
+RequiresMountsFor=%t/containers
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+Restart=always
+TimeoutStopSec=70
+ExecStartPre=/usr/bin/install -d -m 0700 %h/gatus-caddy-data/data %h/gatus-caddy-data/config
+ExecStart=/usr/bin/podman run \
+	--cidfile=%t/%n.ctr-id \
+	--cgroups=no-conmon \
+	--network monitoring \
+	--rm \
+	--sdnotify=conmon \
+	--replace \
+	-d \
+	--name gatus-caddy \
+	-p 443:443 \
+	-v /home/ec2-user/gatus/caddy/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
+	-v %h/gatus-caddy-data/data:/data:Z \
+	-v %h/gatus-caddy-data/config:/config:Z \
+	--label io.containers.autoupdate=registry \
+	docker.io/library/caddy:2
+ExecStop=/usr/bin/podman stop \
+	--ignore -t 10 \
+	--cidfile=%t/%n.ctr-id
+ExecStopPost=/usr/bin/podman rm \
+	-f \
+	--ignore -t 10 \
+	--cidfile=%t/%n.ctr-id
+Type=notify
+NotifyAccess=all
+
+[Install]
+WantedBy=default.target
