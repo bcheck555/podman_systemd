@@ -2,7 +2,8 @@
 
 This repository contains systemd user units for running a small monitoring stack
 with rootless Podman. The units are configured for the `ec2-user` account and use
-absolute paths under `/home/ec2-user`.
+absolute paths under `/home/ec2-user` for the monitoring stack. The No-IP unit
+uses `%h` to resolve the home directory of the user running the service.
 
 ## Services
 
@@ -31,7 +32,7 @@ absolute paths under `/home/ec2-user`.
 - Access: `http://HOST:3001`
 - Data: `/home/ec2-user/uptime-kuma` mounted at `/app/data`
 
-All three containers join the rootless Podman network named `monitoring`.
+All three monitoring containers join the rootless Podman network named `monitoring`.
 Gatus and Uptime Kuma declare ordering and soft dependencies on the Signal API:
 systemd starts `signal-api.service` first, but a Signal API failure does not stop
 the monitoring services from starting. The Signal API is not published on a host
@@ -39,6 +40,64 @@ port; other containers reach it by the `signal-api` network alias.
 
 The units use `--rm` and `--replace`, so systemd recreates their containers when
 they start. Persistent state remains in the host directories listed above.
+
+### No-IP Dynamic DNS
+
+- Unit: `noip-duc.service`
+- Image: `ghcr.io/noipcom/noip-duc:latest`
+- Configuration: `~/noip/noip-duc.env` on the host (`%h/noip/noip-duc.env`
+  in the unit)
+- Network: Podman's default rootless network; no published ports or dependency
+  on the monitoring stack
+
+The [official No-IP image](https://github.com/noipcom/linux-update-client-docker)
+accepts configuration as environment variables. Podman reads the host file with
+`--env-file`; no configuration bind mount is needed.
+
+Run these commands as the host user who will own the service, from this
+repository:
+
+```sh
+install -d -m 0700 "$HOME/noip"
+```
+
+For a new configuration, copy the template (skip this command if the destination
+already exists):
+
+```sh
+install -m 0600 noip-duc.env.example "$HOME/noip/noip-duc.env"
+```
+
+Edit `~/noip/noip-duc.env`, replacing `NOIP_USERNAME` and `NOIP_PASSWORD` with
+your No-IP DDNS Key credentials. Keep `NOIP_HOSTNAMES=all.ddnskey.com` when using
+a DDNS Key. For account credentials instead, set `NOIP_HOSTNAMES` to the actual
+hostname(s), comma-separated. Use plain `KEY=value` lines without `export` or
+surrounding quotes; Podman reads the file directly rather than through a shell.
+Never commit the populated file.
+
+Install and start the service after filling in the credentials:
+
+```sh
+chmod 0600 "$HOME/noip/noip-duc.env"
+install -d -m 0755 "$HOME/.config/systemd/user"
+install -m 0644 noip-duc.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now noip-duc.service
+systemctl --user --no-pager --full status noip-duc.service
+journalctl --user -u noip-duc.service -n 50
+```
+
+Confirm the logs show a successful DNS update or an already-current address.
+To keep it running after logout and start at boot, enable lingering for the
+service user:
+
+```sh
+sudo loginctl enable-linger "$(id -un)"
+```
+
+After changing the configuration, run
+`systemctl --user restart noip-duc.service`. If startup fails, check that the
+config exists, credentials are valid, and the host can reach GHCR and No-IP.
 
 ## Prerequisites
 
