@@ -26,6 +26,7 @@ ExecStart=/usr/bin/podman run \
         --security-opt label=disable \
         --network monitoring \
         --network-alias signal-api \
+        -p 127.0.0.1:8080:8080 \
         -v /home/ec2-user/signal-api:/home/.local/share/signal-cli:Z \
         -e MODE=json-rpc-native \
         -e SIGNAL_CLI_UID=1000 \
